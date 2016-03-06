@@ -184,6 +184,87 @@ class TextConverter(PDFConverter):
     def paint_path(self, gstate, stroke, fill, evenodd, path):
         return
 
+def get_x(item):
+    return item.x0# + x.matrix[4]
+
+def get_y(item):
+    return -item.y0# + item.matrix[5]
+
+def incremental_group(items, f, cutoff):
+    items.sort(key = f)
+    out = [items[:1]]
+    old_y = f(items[0])
+    for item in items[1:]:
+        y0 = f(item)
+        move_down = y0 - old_y
+        if move_down < cutoff:
+            out[-1].append(item)
+        else:
+            out.append([item])
+        old_y = y0
+
+    return out
+
+def adaptive_group(items, word_spacing, column_spacing):
+    items.sort(key = get_x)
+    out = [[items[:1]]]
+    old_mark = items[0].x0
+    old_width = items[0].width
+    total_width = items[0].width / len(items[0].get_text())
+    total_items = 1
+
+    for item in items[1:]:
+        mark = item.x0
+        move = mark - old_mark - old_width
+        cutoff = total_width / total_items
+
+        if move > cutoff * column_spacing:
+            out.append([[item]])
+        elif move > cutoff * word_spacing:
+            out[-1].append([item])
+        else:
+            out[-1][-1].append(item)
+
+        old_mark = mark
+        old_width = item.width
+        total_width += item.width / len(item.get_text())
+        total_items += 1
+
+    return out
+
+class SortedTextConverter(TextConverter):
+
+    def __init__(self, rsrcmgr, vertical_overlap = 3, word_spacing = 0.4, column_spacing = 1):
+        self.items = {}
+        self.vertical_overlap = vertical_overlap
+        self.word_spacing = word_spacing
+        self.column_spacing = column_spacing
+        TextConverter.__init__(self, rsrcmgr, None)
+
+    def receive_layout(self, ltpage):
+        pageid = ltpage.pageid
+        if not pageid in self.items:
+            self.items[pageid] = []
+        items = self.items[pageid]
+
+        for child in ltpage:
+            if isinstance(child, LTText):
+                items.append(child)
+
+    def getData(self):
+        pages = self.items.keys()
+        pages.sort()
+        all_rows = []
+        for page in pages:
+            rows = incremental_group(self.items[page], get_y, self.vertical_overlap)
+            for row in rows:
+                row = adaptive_group(row, self.word_spacing, self.column_spacing)
+                row = [' '.join([''.join([char.get_text() for char in word]) for word in column]) for column in row]
+                all_rows.append(row)
+
+        return all_rows
+
+
 
 ##  HTMLConverter
 ##
